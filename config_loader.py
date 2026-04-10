@@ -5,11 +5,16 @@ import time
 import traceback
 import shutil
 from pathlib import Path
+import subprocess
+import requests
 from rich.console import Console
+from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
+JAR_START_TIMEOUT = 7
 CONFIG_JSON_FILE = 'config.json'
+SERVER_PID_FILE = 'java_server.pid'
 ARCHIVE_EXT = ('.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.gz', '.bz2')
 
 
@@ -69,6 +74,29 @@ def get_full_jar_path(config_info: ConfigInfo):
     return os.path.join(parent_dir, base_name, config_info.jar_name), os.path.join(parent_dir, base_name)
 
 
+def server_is_online(health_url: str) -> bool:
+    try:
+        res = requests.get(health_url, timeout=3)
+        return res.status_code == 200
+    except requests.exceptions.Timeout:
+        return False
+    except requests.exceptions.RequestException:
+        return False
+
+def get_pid_by_server_name(service_name: str) -> int:
+    """
+     获取服务PID
+    :param service_name: 服务名
+    :return: 进程ID
+    """
+    sub_process = subprocess.run(f"ps -ef|grep {service_name}",
+                                 shell=True, stdout=subprocess.PIPE, text=True)
+    for line in sub_process.stdout.splitlines():
+        if f"{service_name}" in line and "grep" not in line:
+            return int(line.split()[1])
+    return -1
+
+
 def get_config_info() -> ConfigInfo:
     if os.path.exists(CONFIG_JSON_FILE):
         with open(CONFIG_JSON_FILE, 'r', encoding="utf-8") as json_file:
@@ -125,3 +153,70 @@ def unpack_server_package_check(config_info: ConfigInfo) -> bool:
             console.print(f"服务程序解压完成，目标目录：{target_directory_name}", style='bold green')
     console.print("服务安装成功，请运行 server_cli start 启动服务", style='bold green')
     return True
+
+
+def server_is_online_by_pid_file(config_info: ConfigInfo, jar_parent_path: str, jar_file_path: str) -> bool:
+    # 先判断是否存在PID文件，如果有，检测服务是否存在
+    path = Path(jar_parent_path)
+    files = [file for file in path.iterdir() if file.is_file() and file.name.lower().endswith('.pid')]
+    if len(files) == 0:
+        # 没有pid文件则通过服务器心跳检测和ps -ef 去判断服务是否存在，存在，写入pid文件(没有pid文件)
+        if config_info.health_url and server_is_online(config_info.health_url):
+            console.print(f"{config_info.jar_name}服务已启动", style='bold yellow')
+            return True
+    else:
+        for file in files:
+            with open(file, 'r') as pid_file:
+                pid = pid_file.read()
+                if not pid:
+                    continue
+                if is_running(int(pid)):
+                    console.print(f"服务已启动，pid: {pid}", style='bold yellow')
+                    return True
+
+    if not os.path.isfile(jar_file_path):
+        console.print(f"启动失败 {jar_file_path} 不存在", style='bold red')
+        return False
+    return True
+
+
+def is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def write_pid(pid: int, jar_parent_path: str):
+    # 写入pid文件
+    with open(os.path.join(jar_parent_path, SERVER_PID_FILE), 'w') as pid_file:
+        pid_file.write(str(pid))
+
+
+def run_server(config_info: ConfigInfo, jar_parent_path: str) -> bool:
+    with Progress(SpinnerColumn(), TextColumn("[process.description]{task.description}]"),
+                  transient=True, console=console) as prog:
+        prog.add_task(f"正在启动服务 {config_info.jar_name} ...", total=None)
+        server_process = subprocess.Popen(["java", "-jar", *config_info.jar_extra_args, config_info.jar_name],
+                                          cwd=jar_parent_path,
+                                          stdout=subprocess.PIPE,
+                                          stderr=subprocess.STDOUT,
+                                          text=True)
+        time.sleep(JAR_START_TIMEOUT)
+        pid = server_process.pid
+        if server_process.poll() is None:
+            console.print(Panel(
+                f"[bold green]服务已启动！[/]\n\n"
+                f"  服务名：[bold]{config_info.jar_name}[/]\n"
+                f"  PID   ：[bold]{pid}[/]\n",
+                title="[green]✔ 启动成功[/]",
+                border_style="green"
+            ))
+        else:
+            stdout, _ = server_process.communicate()
+            console.print(f"服务启动失败，错误信息：\n{stdout}", style='bold red', markup=False)
+            return False
+        console.print(f"服务启动成功，进程ID：{pid}", style='bold green')
+        write_pid(pid, jar_parent_path)
+        return True
