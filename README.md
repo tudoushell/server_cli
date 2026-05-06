@@ -56,7 +56,7 @@ python3 -m venv .venv
   "package_file_path": "/Users/elliotk/tmp/assistant.zip",
   "jar_name": "assistant-server-1.0.jar",
   "server_port": 8080,
-  "jar_extra_args": ["-Xmx1g", "-Xms1024M"],
+  "jvm_args": ["-Xmx1g", "-Xms1024M"],
   "health_check_url": ""
 }
 ```
@@ -66,7 +66,7 @@ python3 -m venv .venv
 - `package_file_path`：服务压缩包路径。
 - `jar_name`：解压后需要启动的 JAR 文件名。
 - `server_port`：服务端口，目前主要作为配置记录。
-- `jar_extra_args`：传给 JVM 的启动参数。
+- `jvm_args`：传给 JVM 的启动参数。
 - `health_check_url`：健康检查地址，返回 HTTP 200 时认为服务在线；留空则只按 PID 判断。
 
 常用命令：
@@ -215,7 +215,7 @@ Example configuration:
   "package_file_path": "/Users/elliotk/tmp/assistant.zip",
   "jar_name": "assistant-server-1.0.jar",
   "server_port": 8080,
-  "jar_extra_args": ["-Xmx1g", "-Xms1024M"],
+  "jvm_args": ["-Xmx1g", "-Xms1024M"],
   "health_check_url": ""
 }
 ```
@@ -225,7 +225,7 @@ Fields:
 - `package_file_path`: path to the service archive.
 - `jar_name`: JAR file name to start after unpacking.
 - `server_port`: service port, currently kept as configuration metadata.
-- `jar_extra_args`: JVM arguments.
+- `jvm_args`: JVM arguments.
 - `health_check_url`: health-check endpoint. HTTP 200 means online; leave it empty to rely on PID checks only.
 
 Common commands:

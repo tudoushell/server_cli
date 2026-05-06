@@ -1,10 +1,11 @@
 # encoding: utf-8
 import os
 import json
+import signal
 import time
 import traceback
 import shutil
-from pathlib import Path
+import shlex
 import subprocess
 import requests
 from rich.console import Console
@@ -89,17 +90,64 @@ def server_is_online(health_url: str) -> bool:
         return False
 
 
-def get_pid_by_server_name(service_name: str) -> int:
+def get_pid_by_pid_file(jar_parent_path: str) -> int:
     """
-     获取服务PID
-    :param service_name: 服务名
-    :return: 进程ID
+    通过PID文件/进程获取服务PID
+    :param jar_parent_path: jar文件的父目录路径
+    :return: 进程ID，若不存在或无法读取则返回-1
     """
-    sub_process = subprocess.run(f"ps -ef|grep {service_name}",
-                                 shell=True, stdout=subprocess.PIPE, text=True)
-    for line in sub_process.stdout.splitlines():
-        if f"{service_name}" in line and "grep" not in line:
-            return int(line.split()[1])
+    pid_file = os.path.join(jar_parent_path, SERVER_PID_FILE)
+    if not os.path.isfile(pid_file):
+        return -1
+    try:
+        with open(pid_file, 'r') as f:
+            pid = int(f.read().strip())
+    except ValueError:
+        return -1
+    return pid if is_running(pid) else -1
+
+
+def get_pid_by_pid_jar_path(jar_path: str) -> int:
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=,args="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False
+        )
+    except OSError:
+        return -1
+
+    jar_path = os.path.abspath(jar_path)
+    jar_name = os.path.basename(jar_path)
+
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        pid, args = parts
+        if "java" not in args:
+            continue
+        if "-jar" not in args:
+            continue
+        try:
+            command_args = shlex.split(args)
+        except ValueError:
+            command_args = args.split()
+        jar_arg = ""
+        try:
+            jar_arg = command_args[command_args.index("-jar") + 1]
+        except (ValueError, IndexError):
+            pass
+        if jar_arg and (os.path.abspath(jar_arg) == jar_path or os.path.basename(jar_arg) == jar_name):
+            try:
+                return int(pid)
+            except ValueError:
+                return -1
     return -1
 
 
@@ -134,7 +182,7 @@ def get_config_info() -> ConfigInfo:
                 console.print("配置文件为空，请检查配置文件", style='bold red')
                 return ConfigInfo('', '')
     else:
-        console.print("配置文件不存在，请检查配置文件 config.json", style='bold red')
+        # console.print("配置文件不存在，请检查配置文件 config.json", style='bold red')
         return ConfigInfo('', '')
 
 
@@ -170,25 +218,8 @@ def unpack_server_package_check(config_info: ConfigInfo) -> bool:
     return True
 
 
-def server_is_online_by_pid_file(config_info: ConfigInfo, jar_parent_path: str) -> bool:
-    # 先判断是否存在PID文件，如果有，检测服务是否存在
-    path = Path(jar_parent_path)
-    files = [file for file in path.iterdir() if file.is_file() and file.name.lower().endswith('.pid')]
-    if len(files) == 0:
-        # 没有pid文件则通过服务器心跳检测和ps -ef 去判断服务是否存在，存在，写入pid文件(没有pid文件)
-        if config_info.health_url and server_is_online(config_info.health_url):
-            console.print(f"{config_info.jar_name}服务已启动", style='bold yellow')
-            return True
-    else:
-        for file in files:
-            with open(file, 'r') as pid_file:
-                pid = pid_file.read()
-                if not pid:
-                    continue
-                if is_running(int(pid)):
-                    console.print(f"服务已启动，pid: {pid}", style='bold yellow')
-                    return True
-    return False
+def server_is_online_by_health_url(config_info: ConfigInfo) -> bool:
+    return bool(config_info.health_url and server_is_online(config_info.health_url))
 
 
 def is_running(pid: int) -> bool:
@@ -207,15 +238,21 @@ def write_pid(pid: int, jar_parent_path: str):
         pid_file.write(str(pid))
 
 
+def remove_pid(jar_parent_path: str):
+    pid_file_path = os.path.join(jar_parent_path, SERVER_PID_FILE)
+    if os.path.isfile(pid_file_path):
+        os.remove(pid_file_path)
+
+
 def read_pid_file(jar_parent_path: str, jar_name: str) -> int:
     pid = -1
     if os.path.isfile(os.path.join(jar_parent_path, SERVER_PID_FILE)):
         with open(os.path.join(jar_parent_path, SERVER_PID_FILE), 'r') as pid_file:
-            pid = int(pid_file.read())
+            pid = int(pid_file.read().strip())
     if pid > -1:
         return pid
     else:
-        return get_pid_by_server_name(jar_name)
+        return get_pid_by_pid_jar_path(jar_name)
 
 
 def print_server_status(jar_name: str, pid: int, server_status: str):
@@ -232,21 +269,56 @@ def print_server_status(jar_name: str, pid: int, server_status: str):
 
 
 def run_server(config_info: ConfigInfo, jar_parent_path: str) -> bool:
-    with Progress(SpinnerColumn(), TextColumn("[process.description]{task.description}]"),
+    with Progress(SpinnerColumn(), TextColumn("[process.description]{task.description}"),
                   transient=True, console=console) as prog:
         prog.add_task(f"正在启动服务 {config_info.jar_name} ...", total=None)
-        server_process = subprocess.Popen(["java", *config_info.jvm_args, "-jar", config_info.jar_name],
-                                          cwd=jar_parent_path,
-                                          stdout=subprocess.PIPE,
-                                          stderr=subprocess.STDOUT,
-                                          text=True)
+        jar_file_path = os.path.join(jar_parent_path, config_info.jar_name)
+        try:
+            server_process = subprocess.Popen(["java", *config_info.jvm_args, "-jar", jar_file_path],
+                                              cwd=jar_parent_path,
+                                              stdout=subprocess.DEVNULL,
+                                              stderr=subprocess.DEVNULL,
+                                              text=True,
+                                              start_new_session=True)
+        except FileNotFoundError:
+            console.print("服务启动失败，未找到 java 命令或服务目录不存在", style='bold red')
+            return False
+        except OSError as exc:
+            console.print(f"服务启动失败，错误信息：{exc}", style='bold red')
+            return False
         time.sleep(JAR_START_TIMEOUT)
         pid = server_process.pid
-        if server_process.poll() is None:
-            print_server_status(jar_name=config_info.jar_name, pid=pid, server_status="ONLINE")
-            write_pid(pid, jar_parent_path)
-            return True
-        else:
-            stdout, _ = server_process.communicate()
-            console.print(f"服务启动失败，错误信息：\n{stdout}", style='bold red', markup=False)
+        if not is_running(pid):
+            console.print("服务启动失败，进程已退出", style='bold red')
             return False
+        write_pid(pid, jar_parent_path)
+        if config_info.health_url and server_is_online_by_health_url(config_info):
+            print_server_status(jar_name=config_info.jar_name, pid=pid, server_status="ONLINE")
+            return True
+        if config_info.health_url:
+            console.print(f"{config_info.jar_name}进程已启动，但健康检查未通过，pid: {pid}", style='bold yellow')
+            return True
+        print_server_status(jar_name=config_info.jar_name, pid=pid, server_status="ONLINE")
+        return True
+
+
+def kill_server(pid: int, jar_name: str, jar_parent_path: str, force: bool = False):
+    if not is_running(pid):
+        remove_pid(jar_parent_path)
+        console.print(f"服务不存在", style='bold yellow')
+        return
+    signum = signal.SIGKILL if force else signal.SIGTERM
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+                  transient=True, console=console) as prog:
+        prog.add_task("正在停止服务...", total=None)
+        try:
+            os.killpg(os.getpgid(pid), signum)
+            time.sleep(5)
+            if is_running(pid):
+                console.print("服务仍在运行，请使用--force 强制停止....")
+            remove_pid(jar_parent_path)
+        except ProcessLookupError:
+            console.print(f"服务不存在", style='bold yellow')
+        except PermissionError:
+            console.print("权限不足，请尝试使用 sudo 或管理员权限执行操作")
+    return
