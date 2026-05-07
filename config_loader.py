@@ -16,6 +16,7 @@ console = Console()
 JAR_START_TIMEOUT = 7
 CONFIG_JSON_FILE = 'config.json'
 SERVER_PID_FILE = 'java_server.pid'
+SERVER_LOG_FILE = 'server.log'
 ARCHIVE_EXT = ('.zip', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.gz', '.bz2')
 
 
@@ -71,7 +72,12 @@ def get_full_jar_path(config_info: ConfigInfo):
     :return: jar文件的完整路径,jar文件的父目录
     """
     parent_dir = os.path.dirname(config_info.package_file_path)
-    base_name = os.path.splitext(os.path.basename(config_info.package_file_path))[0]
+    package_file_name = os.path.basename(config_info.package_file_path)
+    if package_file_name.lower().endswith(".jar"):
+        base_name = ""
+    else:
+        # 后缀为server.zip
+        base_name = os.path.splitext(package_file_name)[0]
     return os.path.join(parent_dir, base_name, config_info.jar_name), os.path.join(parent_dir, base_name)
 
 
@@ -149,6 +155,17 @@ def get_pid_by_pid_jar_path(jar_path: str) -> int:
             except ValueError:
                 return -1
     return -1
+
+
+def get_config_info_by_args(install_dir: str, jar_name: str):
+    if not install_dir or not jar_name:
+        console.print("找不到配置文件config.json，请指定 --install-dir 和 --jar 参数")
+        return None
+    if not os.path.isdir(install_dir):
+        console.print(f"指定的安装目录 {install_dir} 不存在")
+        return None
+    jar_file_path = os.path.join(install_dir, jar_name)
+    return ConfigInfo(jar_file_path, jar_name, [], is_exists_config=True)
 
 
 def get_config_info() -> ConfigInfo:
@@ -242,6 +259,14 @@ def remove_pid(jar_parent_path: str):
     pid_file_path = os.path.join(jar_parent_path, SERVER_PID_FILE)
     if os.path.isfile(pid_file_path):
         os.remove(pid_file_path)
+
+
+def get_log_file_path(jar_parent_path: str, log_file: str = None) -> str:
+    if log_file:
+        if os.path.isabs(log_file):
+            return log_file
+        return os.path.join(jar_parent_path, log_file)
+    return os.path.join(jar_parent_path, SERVER_LOG_FILE)
 
 
 def read_pid_file(jar_parent_path: str, jar_name: str) -> int:

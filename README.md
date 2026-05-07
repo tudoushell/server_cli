@@ -4,316 +4,606 @@
 
 ## 中文
 
-`server_cli` 是一个用于部署和管理 Java JAR 服务的 Python 命令行工具。项目基于 Typer 构建命令行交互，使用 Rich 输出状态表格和运行提示。
+`server_cli` 是一个用于部署和管理 Java JAR 服务的 Python 命令行工具。当前主入口是 `main.py`，面向单服务管理场景，支持部署、启动、停止、重启、状态查看和日志查看。
 
-这个仓库目前包含两套 CLI：
+CLI 基于 Typer 实现，终端输出使用 Rich。
 
-- `main.py`：读取当前目录的 `config.json`，用于管理单个固定服务。
-- `manager.py`：以 `~/java_services` 为工作目录，用于管理多个服务，功能更完整。
-
-如果只是按现有 `config.json` 管理一个服务，使用 `main.py`。如果希望部署和管理多个服务，优先使用 `manager.py`。
-
-## 功能特性
+## 功能概览
 
 - 解压 Java 服务包。
-- 启动指定 JAR 服务。
-- 记录和读取 PID。
-- 查看服务运行状态。
+- 启动指定 JAR。
+- 使用 PID 文件记录服务进程。
+- 支持按 PID 文件和 JAR 路径查找进程。
+- 支持停止、强制停止、重启。
 - 支持可选健康检查 URL。
-- `manager.py` 支持停止、重启和日志查看。
-- 使用 Rich 展示更易读的终端输出。
+- 支持查看日志文件最近 N 行和实时跟踪。
+- 支持 `config.json` 配置文件，也支持部分命令直接传命令行参数。
 
 ## 环境要求
 
 - Python 3.12 或兼容版本
 - Java 运行环境
-- macOS 或 Linux 终端环境
+- macOS 或 Linux
 
 ## 安装
-
-创建虚拟环境并安装依赖：
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-检查命令是否可用：
+检查 CLI：
 
 ```bash
 .venv/bin/python main.py --help
-.venv/bin/python manager.py --help
 ```
 
-## 使用 `main.py`
+## 快速开始
 
-`main.py` 是配置驱动的单服务入口。它会读取项目根目录下的 `config.json`。
-
-配置示例：
-
-```json
-{
-  "package_file_path": "/Users/elliotk/tmp/assistant.zip",
-  "jar_name": "assistant-server-1.0.jar",
-  "server_port": 8080,
-  "jvm_args": ["-Xmx1g", "-Xms1024M"],
-  "health_check_url": ""
-}
-```
-
-配置字段：
-
-- `package_file_path`：服务压缩包路径。
-- `jar_name`：解压后需要启动的 JAR 文件名。
-- `server_port`：服务端口，目前主要作为配置记录。
-- `jvm_args`：传给 JVM 的启动参数。
-- `health_check_url`：健康检查地址，返回 HTTP 200 时认为服务在线；留空则只按 PID 判断。
-
-常用命令：
+使用配置文件：
 
 ```bash
 .venv/bin/python main.py deploy
 .venv/bin/python main.py start
 .venv/bin/python main.py status
+.venv/bin/python main.py stop
+.venv/bin/python main.py restart
 ```
 
-当前限制：`main.py` 中的 `stop`、`restart` 和 `log` 命令还没有完整实现。
+不使用配置文件，直接指定服务目录和 JAR：
 
-## 使用 `manager.py`
+```bash
+.venv/bin/python main.py start --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+.venv/bin/python main.py status --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+.venv/bin/python main.py stop --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+.venv/bin/python main.py restart --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+```
 
-`manager.py` 是多服务管理入口，默认使用以下目录：
+## 配置文件
+
+`main.py` 会优先读取当前运行目录下的 `config.json`。
+
+示例：
+
+```json
+{
+  "package_file_path": "/Users/elliotk/tmp/assistant.zip",
+  "jar_name": "assistant-server-1.0.jar",
+  "jvm_args": ["-Xmx1g", "-Xms1024M"],
+  "health_check_url": "http://127.0.0.1:8080/health"
+}
+```
+
+字段说明：
+
+- `package_file_path`：服务包路径。`deploy` 会解压它；其他命令会用它推导服务目录。
+- `jar_name`：需要启动或管理的 JAR 文件名。
+- `jvm_args`：JVM 参数列表。
+- `health_check_url`：可选健康检查地址，HTTP 200 表示健康。
+
+服务目录推导规则：
 
 ```text
-~/java_services          # 服务部署目录
-~/java_services/.pids    # PID 文件目录
-~/java_services/.logs    # 日志目录
+/Users/elliotk/tmp/assistant.zip
+=> /Users/elliotk/tmp/assistant
+=> /Users/elliotk/tmp/assistant/assistant-server-1.0.jar
 ```
 
-部署并启动服务：
+如果 `package_file_path` 本身是 `.jar` 文件，则使用该 JAR 所在目录作为服务目录。
+
+## 命令
+
+### deploy
+
+从配置文件部署：
 
 ```bash
-.venv/bin/python manager.py deploy /path/to/app.zip --name my-service --jvm "-Xmx512m" --args "--server.port=8080"
+.venv/bin/python main.py deploy
 ```
 
-管理服务：
+不使用配置文件：
 
 ```bash
-.venv/bin/python manager.py start my-service
-.venv/bin/python manager.py stop my-service
-.venv/bin/python manager.py restart my-service
-.venv/bin/python manager.py status
+.venv/bin/python main.py deploy --package /Users/elliotk/tmp/assistant.zip --jar assistant-server-1.0.jar
 ```
 
-查看日志：
+`deploy` 会把压缩包解压到同名目录，并检查目标 JAR 是否存在。
+
+### start
+
+从配置文件启动：
 
 ```bash
-.venv/bin/python manager.py logs my-service --lines 100
-.venv/bin/python manager.py logs my-service --follow
+.venv/bin/python main.py start
 ```
 
-如果没有传入服务名，`manager.py` 会在多个已部署服务之间提供交互式选择；如果只有一个服务，会自动选择该服务。
+不使用配置文件：
+
+```bash
+.venv/bin/python main.py start --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+```
+
+临时指定 JVM 参数：
+
+```bash
+.venv/bin/python main.py start --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar --jvm="-Xms500m -Xmx512m"
+```
+
+注意：JVM 参数以 `-` 开头，建议使用 `--jvm="..."` 写法，避免被 Typer/Click 当作 CLI 选项。
+
+启动状态判断：
+
+- 没有配置 `health_check_url` 时，进程存活即表示 JAR 进程已启动。
+- 配置了 `health_check_url` 时，健康检查通过才显示 `ONLINE`。
+- 如果进程存在但健康检查失败，会提示“进程存在但健康检查未通过”。
+
+### stop
+
+从配置文件停止：
+
+```bash
+.venv/bin/python main.py stop
+```
+
+不使用配置文件：
+
+```bash
+.venv/bin/python main.py stop --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+```
+
+强制停止：
+
+```bash
+.venv/bin/python main.py stop --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar --force
+```
+
+停止时会先读取 PID 文件；如果没有 PID 文件，则按完整 JAR 路径查找进程。
+
+### restart
+
+从配置文件重启：
+
+```bash
+.venv/bin/python main.py restart
+.venv/bin/python main.py restart --force
+```
+
+不使用配置文件：
+
+```bash
+.venv/bin/python main.py restart --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+.venv/bin/python main.py restart --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar --force
+```
+
+`restart` 会先停止当前服务，再重新启动。如果服务未运行，会直接启动。
+
+### status
+
+从配置文件查看状态：
+
+```bash
+.venv/bin/python main.py status
+```
+
+不使用配置文件：
+
+```bash
+.venv/bin/python main.py status --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+```
+
+状态判断规则：
+
+- 无健康检查地址：按 PID 是否存活判断。
+- 有健康检查地址：PID 存活且健康检查返回 HTTP 200 才显示 `ONLINE`。
+
+### log
+
+默认读取服务目录下的 `server.log`：
+
+```bash
+.venv/bin/python main.py log
+```
+
+查看最近 200 行：
+
+```bash
+.venv/bin/python main.py log --lines 200
+```
+
+实时跟踪：
+
+```bash
+.venv/bin/python main.py log --follow
+```
+
+指定日志文件：
+
+```bash
+.venv/bin/python main.py log --log-file logs/app.log
+.venv/bin/python main.py log --log-file /var/log/app.log
+```
+
+不使用配置文件：
+
+```bash
+.venv/bin/python main.py log --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+```
+
+说明：当前 `run_server` 默认把 Java 标准输出和错误输出丢弃到 `DEVNULL`，不会自动生成 `server.log`。`log` 命令查看的是已经存在的日志文件，例如 Java 应用自己写出的日志，或通过 `--log-file` 指定的文件。
+
+## 测试
+
+运行单元测试：
+
+```bash
+.venv/bin/python -m unittest discover -s tests
+```
+
+语法检查：
+
+```bash
+.venv/bin/python -m py_compile main.py config_loader.py manager.py test.py tests/test_main.py tests/test_config_loader.py
+```
+
+## 打包
+
+推荐使用脚本打包：
+
+```bash
+scripts/build_executable.sh
+```
+
+自定义可执行文件名：
+
+```bash
+scripts/build_executable.sh --name jsvc
+```
+
+脚本内部使用 PyInstaller，等价于手动执行：
+
+```bash
+.venv/bin/python -m PyInstaller --onefile --name server-cli main.py
+```
+
+产物位置：
+
+```text
+dist/server-cli
+```
+
+运行：
+
+```bash
+./dist/server-cli --help
+```
+
+打包后仍需要准备 `config.json`，或在支持的命令中通过 `--install-dir` 和 `--jar` 指定服务。
 
 ## 项目结构
 
 ```text
 .
-├── config.json          # main.py 使用的服务配置
-├── config_loader.py     # 配置读取、解压、启动和状态检查逻辑
-├── main.py              # 单服务 CLI 入口
-├── manager.py           # 多服务 CLI 入口
-├── requirements.txt     # Python 依赖
-├── test.py              # 临时实验脚本
-└── README.md            # 项目说明
+├── config_loader.py          # 配置读取、路径推导、PID、启动、停止等辅助逻辑
+├── main.py                   # 主 CLI 入口
+├── manager.py                # 多服务管理实验入口
+├── requirements.txt          # 依赖列表
+├── tests/
+│   ├── test_config_loader.py
+│   └── test_main.py
+└── README.md
 ```
 
-## 开发
+## manager.py
 
-语法检查：
-
-```bash
-.venv/bin/python -m py_compile main.py config_loader.py manager.py test.py
-```
-
-查看当前服务状态：
-
-```bash
-.venv/bin/python main.py status
-.venv/bin/python manager.py status
-```
-
-## 依赖说明
-
-当前 `requirements.txt` 来自虚拟环境导出，包含运行依赖以及打包相关工具。项目实际核心运行依赖主要是：
-
-- `typer`
-- `rich`
-- `requests`
-
-如果只需要运行源码，可以把 `requirements.txt` 精简到上述核心依赖。
+仓库中保留了 `manager.py`，它是一个多服务管理入口，默认使用 `~/java_services` 作为工作目录。当前主线是 `main.py`，`manager.py` 可以作为后续多服务管理能力的参考实现。
 
 ## 已知限制
 
-- `main.py` 的停止、重启和日志命令尚未完成。
-- 尚未提供正式单元测试。
-- 尚未提供 `pyproject.toml` 或安装入口。
-- `config.json` 中使用了本机绝对路径，换环境运行前需要修改。
-- 进程识别主要依赖 PID 文件和进程查询，生产环境使用前建议进一步加固。
+- `deploy` 仍按压缩包文件名推导安装目录，暂不支持显式 `install_dir`。
+- `run_server` 不会自动把 Java stdout/stderr 写入 `server.log`。
+- `requirements.txt` 同时包含运行依赖和打包工具，后续可以拆分运行依赖与开发依赖。
+- 项目尚未提供 `pyproject.toml` 和正式 console entry point。
 
 ---
 
 ## English
 
-`server_cli` is a Python command-line tool for deploying and managing Java JAR services. It uses Typer for the CLI and Rich for readable terminal output.
+`server_cli` is a Python command-line tool for deploying and managing Java JAR services. The primary entry point is `main.py`, designed for single-service workflows including deploy, start, stop, restart, status, and log inspection.
 
-The repository currently contains two CLI entry points:
-
-- `main.py`: reads `config.json` from the project directory and manages one configured service.
-- `manager.py`: manages multiple services under `~/java_services` and provides a more complete command set.
-
-Use `main.py` when you want to manage the single service described by `config.json`. Use `manager.py` when you want to deploy and manage multiple services.
+The CLI is built with Typer and uses Rich for terminal output.
 
 ## Features
 
 - Unpack Java service archives.
-- Start a specified JAR service.
-- Write and read PID files.
-- Show service status.
-- Support an optional health-check URL.
-- `manager.py` supports stop, restart, and log viewing.
-- Rich terminal output for better readability.
+- Start a selected JAR file.
+- Record service processes with PID files.
+- Locate processes by PID file and JAR path.
+- Stop, force stop, and restart services.
+- Optional health-check URL support.
+- Show recent log lines or follow a log file.
+- Supports both `config.json` and command-line arguments for selected commands.
 
 ## Requirements
 
-- Python 3.12 or a compatible version
+- Python 3.12 or compatible
 - Java runtime
-- macOS or Linux terminal environment
+- macOS or Linux
 
 ## Installation
-
-Create a virtual environment and install dependencies:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-Check that the CLIs are available:
+Check the CLI:
 
 ```bash
 .venv/bin/python main.py --help
-.venv/bin/python manager.py --help
 ```
 
-## Using `main.py`
+## Quick Start
 
-`main.py` is the config-driven single-service entry point. It reads `config.json` from the project root.
-
-Example configuration:
-
-```json
-{
-  "package_file_path": "/Users/elliotk/tmp/assistant.zip",
-  "jar_name": "assistant-server-1.0.jar",
-  "server_port": 8080,
-  "jvm_args": ["-Xmx1g", "-Xms1024M"],
-  "health_check_url": ""
-}
-```
-
-Fields:
-
-- `package_file_path`: path to the service archive.
-- `jar_name`: JAR file name to start after unpacking.
-- `server_port`: service port, currently kept as configuration metadata.
-- `jvm_args`: JVM arguments.
-- `health_check_url`: health-check endpoint. HTTP 200 means online; leave it empty to rely on PID checks only.
-
-Common commands:
+With `config.json`:
 
 ```bash
 .venv/bin/python main.py deploy
 .venv/bin/python main.py start
 .venv/bin/python main.py status
+.venv/bin/python main.py stop
+.venv/bin/python main.py restart
 ```
 
-Current limitation: `stop`, `restart`, and `log` in `main.py` are not fully implemented yet.
+Without `config.json`, pass the service directory and JAR name:
 
-## Using `manager.py`
+```bash
+.venv/bin/python main.py start --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+.venv/bin/python main.py status --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+.venv/bin/python main.py stop --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+.venv/bin/python main.py restart --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+```
 
-`manager.py` is the multi-service entry point. It uses these directories by default:
+## Configuration File
+
+`main.py` first looks for `config.json` in the current working directory.
+
+Example:
+
+```json
+{
+  "package_file_path": "/Users/elliotk/tmp/assistant.zip",
+  "jar_name": "assistant-server-1.0.jar",
+  "jvm_args": ["-Xmx1g", "-Xms1024M"],
+  "health_check_url": "http://127.0.0.1:8080/health"
+}
+```
+
+Fields:
+
+- `package_file_path`: service archive path. `deploy` unpacks it; other commands use it to infer the service directory.
+- `jar_name`: JAR file name to manage.
+- `jvm_args`: JVM argument list.
+- `health_check_url`: optional health endpoint. HTTP 200 means healthy.
+
+Service directory inference:
 
 ```text
-~/java_services          # Service deployment directory
-~/java_services/.pids    # PID files
-~/java_services/.logs    # Log files
+/Users/elliotk/tmp/assistant.zip
+=> /Users/elliotk/tmp/assistant
+=> /Users/elliotk/tmp/assistant/assistant-server-1.0.jar
 ```
 
-Deploy and start a service:
+If `package_file_path` is already a `.jar` file, its parent directory is used as the service directory.
+
+## Commands
+
+### deploy
+
+With config:
 
 ```bash
-.venv/bin/python manager.py deploy /path/to/app.zip --name my-service --jvm "-Xmx512m" --args "--server.port=8080"
+.venv/bin/python main.py deploy
 ```
 
-Manage a service:
+Without config:
 
 ```bash
-.venv/bin/python manager.py start my-service
-.venv/bin/python manager.py stop my-service
-.venv/bin/python manager.py restart my-service
-.venv/bin/python manager.py status
+.venv/bin/python main.py deploy --package /Users/elliotk/tmp/assistant.zip --jar assistant-server-1.0.jar
 ```
 
-View logs:
+`deploy` unpacks the archive into a same-named directory and checks whether the target JAR exists.
+
+### start
+
+With config:
 
 ```bash
-.venv/bin/python manager.py logs my-service --lines 100
-.venv/bin/python manager.py logs my-service --follow
+.venv/bin/python main.py start
 ```
 
-If no service name is provided, `manager.py` prompts for a selection when multiple services exist. If only one service exists, it is selected automatically.
+Without config:
+
+```bash
+.venv/bin/python main.py start --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+```
+
+Override JVM arguments:
+
+```bash
+.venv/bin/python main.py start --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar --jvm="-Xms500m -Xmx512m"
+```
+
+Because JVM arguments start with `-`, prefer the `--jvm="..."` form so Typer/Click does not parse them as CLI options.
+
+Start status rules:
+
+- Without `health_check_url`, a live process means the JAR process has started.
+- With `health_check_url`, the service is shown as `ONLINE` only after the health check succeeds.
+- If the process exists but the health check fails, the CLI reports that the process exists but health is not confirmed.
+
+### stop
+
+With config:
+
+```bash
+.venv/bin/python main.py stop
+```
+
+Without config:
+
+```bash
+.venv/bin/python main.py stop --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+```
+
+Force stop:
+
+```bash
+.venv/bin/python main.py stop --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar --force
+```
+
+`stop` first checks the PID file. If no PID file is available, it searches by the full JAR path.
+
+### restart
+
+With config:
+
+```bash
+.venv/bin/python main.py restart
+.venv/bin/python main.py restart --force
+```
+
+Without config:
+
+```bash
+.venv/bin/python main.py restart --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+.venv/bin/python main.py restart --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar --force
+```
+
+`restart` stops the current service first and then starts it again. If the service is not running, it starts directly.
+
+### status
+
+With config:
+
+```bash
+.venv/bin/python main.py status
+```
+
+Without config:
+
+```bash
+.venv/bin/python main.py status --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+```
+
+Status rules:
+
+- Without a health URL, status is based on whether the PID is alive.
+- With a health URL, the service is `ONLINE` only when the PID is alive and the health check returns HTTP 200.
+
+### log
+
+Read the default `server.log` under the service directory:
+
+```bash
+.venv/bin/python main.py log
+```
+
+Show the last 200 lines:
+
+```bash
+.venv/bin/python main.py log --lines 200
+```
+
+Follow logs:
+
+```bash
+.venv/bin/python main.py log --follow
+```
+
+Specify a log file:
+
+```bash
+.venv/bin/python main.py log --log-file logs/app.log
+.venv/bin/python main.py log --log-file /var/log/app.log
+```
+
+Without config:
+
+```bash
+.venv/bin/python main.py log --install-dir /Users/elliotk/tmp/assistant --jar assistant-server-1.0.jar
+```
+
+Note: `run_server` currently discards Java stdout/stderr to `DEVNULL`, so it does not automatically create `server.log`. The `log` command reads an existing log file, such as one written by the Java application or specified with `--log-file`.
+
+## Tests
+
+Run unit tests:
+
+```bash
+.venv/bin/python -m unittest discover -s tests
+```
+
+Syntax check:
+
+```bash
+.venv/bin/python -m py_compile main.py config_loader.py manager.py test.py tests/test_main.py tests/test_config_loader.py
+```
+
+## Packaging
+
+Recommended build command:
+
+```bash
+scripts/build_executable.sh
+```
+
+Customize the executable name:
+
+```bash
+scripts/build_executable.sh --name jsvc
+```
+
+The script uses PyInstaller internally. The equivalent manual command is:
+
+```bash
+.venv/bin/python -m PyInstaller --onefile --name server-cli main.py
+```
+
+Output:
+
+```text
+dist/server-cli
+```
+
+Run:
+
+```bash
+./dist/server-cli --help
+```
+
+After packaging, you still need to provide `config.json` or pass `--install-dir` and `--jar` for commands that support them.
 
 ## Project Structure
 
 ```text
 .
-├── config.json          # Service configuration used by main.py
-├── config_loader.py     # Config loading, unpacking, startup, and status logic
-├── main.py              # Single-service CLI entry point
-├── manager.py           # Multi-service CLI entry point
-├── requirements.txt     # Python dependencies
-├── test.py              # Temporary experiment script
-└── README.md            # Project documentation
+├── config_loader.py          # Config loading, path inference, PID, start/stop helpers
+├── main.py                   # Primary CLI entry point
+├── manager.py                # Experimental multi-service entry point
+├── requirements.txt          # Dependencies
+├── tests/
+│   ├── test_config_loader.py
+│   └── test_main.py
+└── README.md
 ```
 
-## Development
+## manager.py
 
-Syntax check:
-
-```bash
-.venv/bin/python -m py_compile main.py config_loader.py manager.py test.py
-```
-
-Show current service status:
-
-```bash
-.venv/bin/python main.py status
-.venv/bin/python manager.py status
-```
-
-## Dependencies
-
-The current `requirements.txt` was exported from a virtual environment, so it includes runtime dependencies and packaging tools. The core runtime dependencies are:
-
-- `typer`
-- `rich`
-- `requests`
-
-If you only need to run the source code, `requirements.txt` can be reduced to those core dependencies.
+`manager.py` is kept as a multi-service management entry point. It uses `~/java_services` by default. The current main path is `main.py`; `manager.py` can be used as a reference for future multi-service features.
 
 ## Known Limitations
 
-- `stop`, `restart`, and `log` in `main.py` are not completed.
-- No formal unit tests are included yet.
-- No `pyproject.toml` or installable console entry point is included yet.
-- `config.json` contains local absolute paths and must be updated for another environment.
-- Process detection mainly relies on PID files and process lookup; hardening is recommended before production use.
+- `deploy` still infers the installation directory from the archive name and does not yet support an explicit `install_dir`.
+- `run_server` does not automatically write Java stdout/stderr to `server.log`.
+- `requirements.txt` includes both runtime dependencies and packaging tools; these can be split later.
+- The project does not yet provide `pyproject.toml` or an installable console entry point.

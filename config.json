@@ -1,7 +1,6 @@
 {
   "package_file_path": "/Users/elliotk/tmp/assistant.zip",
   "jar_name": "assistant-server-1.0.jar",
-  "server_port": 8080,
   "jvm_args": ["-Xmx1g", "-Xms1024M"],
   "health_check_url": ""
 }
